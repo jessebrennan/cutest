@@ -1,2 +1,2 @@
 # cutest
-A cute fast Python test framework
+A cute, composable unit test framework for Python
