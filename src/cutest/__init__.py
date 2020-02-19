@@ -46,15 +46,15 @@ class Model:
     def fixture(self, obj):
         if inspect.isclass(obj):
             # FIXME: assert has __enter__ and __exit__
-            return Fixture(self, obj)
+            return FixtureFactory(self, obj)
         elif inspect.isgeneratorfunction(obj):
             cm = contextmanager(obj)
-            return Fixture(self, cm)
+            return FixtureFactory(self, cm)
         else:
             raise CutestError('fixture must decorate a contextmanager or generator')
 
     def test(self, func):
-        return Test(self, func)
+        return TestFactory(self, func)
 
     def initialize(self):
         """
@@ -88,13 +88,10 @@ class Node(ABC):
 
 class CallableNode(Node, ABC):
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.kwargs = None
-        self.args = None
-
-    def __call__(self, *args, **kwargs):
-        raise NotImplementedError
+    def __init__(self, model, args, kwargs):
+        super().__init__(model)
+        self.args = args
+        self.kwargs = kwargs
 
     def _replace_args(self, fixtures) -> Tuple[Iterable, Mapping]:
         """
@@ -124,7 +121,7 @@ class Suite(Node):
     def __init__(self, model: Model, func):
         super().__init__(model)
         self._func = func
-        self.fixture_stack: Stack[Fixture] = Stack()
+        self.fixture_stack: Stack[FixtureFactory] = Stack()
 
     @property
     def data(self):
@@ -149,16 +146,22 @@ class Suite(Node):
             self.fixture_stack.top().add(node)
 
 
-class Fixture(CallableNode):
-    def __init__(self, model: 'Model', cm):
-        super().__init__(model)
-        self._cm = cm
-        self._initialized_cm = None
+class FixtureFactory:
+
+    def __init__(self, model: Model, cm):
+        self.model = model
+        self.cm = cm
 
     def __call__(self, *args, **kwargs):
-        self.args = args
-        self.kwargs = kwargs
-        return self
+        return Fixture(self.cm, self.model, args, kwargs)
+
+
+class Fixture(CallableNode):
+
+    def __init__(self, cm, model: Model, args, kwargs):
+        super().__init__(model, args, kwargs)
+        self.cm = cm
+        self._initialized_cm = None
 
     # FIXME: This seems to cause some problems, at least with Jupyter
     # def __getattr__(self, item):
@@ -175,7 +178,7 @@ class Fixture(CallableNode):
         can be used
         """
         args, kwargs = self._replace_args(fixtures)
-        self._initialized_cm = self._cm(*args, **kwargs)
+        self._initialized_cm = self.cm(*args, **kwargs)
 
     def context_manager(self):
         if self._initialized_cm is None:
@@ -185,7 +188,7 @@ class Fixture(CallableNode):
 
     @property
     def data(self):
-        return self._cm
+        return self.cm
 
     def add(self, node):
         node.parent = self
@@ -220,16 +223,23 @@ class Concurrent(Node):
         return self.executor
 
 
-class Test(CallableNode):
+class TestFactory:
+
     def __init__(self, model: Model, func):
-        super().__init__(model)
+        self.model = model
         self._func = func
-        self.args = None
-        self.kwargs = None
 
     def __call__(self, *args, **kwargs):
         self.args = args
         self.kwargs = kwargs
+        Test(self._func, self.model, args, kwargs)
+
+
+class Test(CallableNode):
+
+    def __init__(self, func, model, args, kwargs):
+        super().__init__(model, args, kwargs)
+        self.func = func
         if self.model.current_suite is None:
             raise CutestError(f'Test must be called from within a suite')
         else:
@@ -239,7 +249,7 @@ class Test(CallableNode):
         # TODO: Maybe log something here about the test that's running
         args, kwargs = self._replace_args(fixtures)
         try:
-            result = self._func(*args, **kwargs)
+            result = self.func(*args, **kwargs)
         except Exception as e:
             # TODO: Log failure, here or in recursive run? (probably here)
             return False, e
@@ -249,7 +259,7 @@ class Test(CallableNode):
 
     @property
     def data(self):
-        return self._func
+        return self.func
 
 
 class Runner:
