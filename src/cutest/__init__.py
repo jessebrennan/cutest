@@ -19,6 +19,7 @@ Outstanding things:
 - Concurrent fixture
 - Skipping tests
 - using fixture outside of test
+- Calling tests inside of tests?
 
 Next step:
 - Write a test that uses a simple fixture. Observe where / how
@@ -31,11 +32,44 @@ Next step:
 log = logging.getLogger(__name__)
 
 
+class Model:
+    def __init__(self):
+        # Used to track the suite when building the graph
+        self.current_suite: Optional[_Suite] = None
+        self.suites: List[_Suite] = []
+
+    def suite(self, func):
+        suite = _Suite(self, func)
+        self.suites.append(suite)
+        return suite
+
+    def fixture(self, obj):
+        if inspect.isclass(obj):
+            # FIXME: assert has __enter__ and __exit__
+            return _Fixture(self, obj)
+        elif inspect.isgeneratorfunction(obj):
+            cm = contextmanager(obj)
+            return _Fixture(self, cm)
+        else:
+            raise CutestError('fixture must decorate a contextmanager or generator')
+
+    def test(self, func):
+        return _Test(self, func)
+
+    def initialize(self):
+        """
+        Build the test model graph
+        """
+        for suite in self.suites:
+            suite.initialize()
+
+
 class _GraphNode(ABC):
     """
     Inherit to be allowed in the Suite graph
     """
-    def __init__(self):
+    def __init__(self, model: Model):
+        self.model = model
         # root is set when a node is added to a _Suite
         self.root: Optional[_Suite] = None
         # parent is set when a node is added to a node
@@ -54,8 +88,8 @@ class _GraphNode(ABC):
 
 class _CallableNode(_GraphNode, ABC):
 
-    def __init__(self):
-        super().__init__()
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         self.kwargs = None
         self.args = None
 
@@ -87,8 +121,8 @@ class _CallableNode(_GraphNode, ABC):
 # FIXME: Should this inherit from _GraphNode?
 class _Suite(_GraphNode):
 
-    def __init__(self, func):
-        super().__init__()
+    def __init__(self, model: Model, func):
+        super().__init__(model)
         self._func = func
         self.fixture_stack: Stack[_Fixture] = Stack()
 
@@ -96,13 +130,15 @@ class _Suite(_GraphNode):
     def data(self):
         return self._func
 
-    def build_graph(self):
+    def initialize(self):
+        # Reset children to make this method idempotent
+        self.children = []
+        assert self.fixture_stack.empty()
         self.root = self
         self.parent = None
-        global _current_suite
-        _current_suite = self
+        self.model.current_suite = self
         self._func()
-        _current_suite = None
+        self.model.current_suite = None
 
     def add(self, node: _GraphNode):
         node.root = self.root
@@ -113,17 +149,9 @@ class _Suite(_GraphNode):
             self.fixture_stack.top().add(node)
 
 
-# Used to track the suite when building the graph
-_current_suite = None
-
-
-def suite(func):
-    return _Suite(func)
-
-
 class _Fixture(_CallableNode):
-    def __init__(self, cm):
-        super().__init__()
+    def __init__(self, model: 'Model', cm):
+        super().__init__(model)
         self._cm = cm
         self._initialized_cm = None
 
@@ -132,13 +160,14 @@ class _Fixture(_CallableNode):
         self.kwargs = kwargs
         return self
 
-    def __getattr__(self, item):
-        """
-        Fixtures need to be substituted with the underlying context manager
-        before they can be used by the user. This can only happen inside of a
-        test (or while initializing another fixture).
-        """
-        raise CutestError('Fixtures can only be used within tests')
+    # FIXME: This seems to cause some problems, at least with Jupyter
+    # def __getattr__(self, item):
+    #     """
+    #     Fixtures need to be substituted with the underlying context manager
+    #     before they can be used by the user. This can only happen inside of a
+    #     test (or while initializing another fixture).
+    #     """
+    #     raise CutestError('Fixtures can only be used within tests')
 
     def initialize(self, fixtures: Set['_Fixture']):
         """
@@ -163,14 +192,12 @@ class _Fixture(_CallableNode):
         self.children.append(node)
 
     def __enter__(self):
-        global _current_suite
-        _current_suite.add(self)
-        _current_suite.fixture_stack.add(self)
+        self.model.current_suite.add(self)
+        self.model.current_suite.fixture_stack.add(self)
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        global _current_suite
-        fixture_ = _current_suite.fixture_stack.pop()
+        fixture_ = self.model.current_suite.fixture_stack.pop()
         assert fixture_ is self
         return False
 
@@ -178,23 +205,14 @@ class _Fixture(_CallableNode):
         self.children.append(test_)
 
 
-def fixture(obj):
-    if inspect.isclass(obj):
-        return _Fixture(obj)
-    elif inspect.isgeneratorfunction(obj):
-        cm = contextmanager(obj)
-        return _Fixture(cm)
-    else:
-        raise CutestError('fixture must decorate a contextmanager or generator')
-
-
 class _Concurrent(_GraphNode):
     # TODO: Finish implementing me. Inherit from _Fixture instead?
     # Latest idea is to have this point to a runner class, not take in
     # executor
 
-    def __init__(self, executor: Executor):
-        super().__init__()
+    def __init__(self, model: Model, executor: Executor):
+        # FIXME: What about model for this guy?
+        super().__init__(model)
         self.executor = executor
 
     @property
@@ -203,8 +221,8 @@ class _Concurrent(_GraphNode):
 
 
 class _Test(_CallableNode):
-    def __init__(self, func):
-        super().__init__()
+    def __init__(self, model: Model, func):
+        super().__init__(model)
         self._func = func
         self.args = None
         self.kwargs = None
@@ -212,11 +230,10 @@ class _Test(_CallableNode):
     def __call__(self, *args, **kwargs):
         self.args = args
         self.kwargs = kwargs
-        global _current_suite
-        if _current_suite is None:
+        if self.model.current_suite is None:
             raise CutestError(f'Test must be called from within a suite')
         else:
-            _current_suite.add(self)
+            self.model.current_suite.add(self)
 
     def run(self, fixtures: Set[_Fixture]):
         # TODO: Maybe log something here about the test that's running
@@ -233,10 +250,6 @@ class _Test(_CallableNode):
     @property
     def data(self):
         return self._func
-
-
-def test(func):
-    return _Test(func)
 
 
 class Runner:
@@ -297,7 +310,7 @@ def main(argv):
         if isinstance(member, _Suite):
             suites.append(member)
     for suite_ in suites:
-        suite_.build_graph()
+        suite_.initialize()
     runner = Runner()
     runner.run_suites(suites)
 
