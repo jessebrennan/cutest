@@ -35,26 +35,26 @@ log = logging.getLogger(__name__)
 class Model:
     def __init__(self):
         # Used to track the suite when building the graph
-        self.current_suite: Optional[_Suite] = None
-        self.suites: List[_Suite] = []
+        self.current_suite: Optional[Suite] = None
+        self.suites: List[Suite] = []
 
     def suite(self, func):
-        suite = _Suite(self, func)
+        suite = Suite(self, func)
         self.suites.append(suite)
         return suite
 
     def fixture(self, obj):
         if inspect.isclass(obj):
             # FIXME: assert has __enter__ and __exit__
-            return _Fixture(self, obj)
+            return Fixture(self, obj)
         elif inspect.isgeneratorfunction(obj):
             cm = contextmanager(obj)
-            return _Fixture(self, cm)
+            return Fixture(self, cm)
         else:
             raise CutestError('fixture must decorate a contextmanager or generator')
 
     def test(self, func):
-        return _Test(self, func)
+        return Test(self, func)
 
     def initialize(self):
         """
@@ -64,17 +64,17 @@ class Model:
             suite.initialize()
 
 
-class _GraphNode(ABC):
+class Node(ABC):
     """
     Inherit to be allowed in the Suite graph
     """
     def __init__(self, model: Model):
         self.model = model
         # root is set when a node is added to a _Suite
-        self.root: Optional[_Suite] = None
+        self.root: Optional[Suite] = None
         # parent is set when a node is added to a node
-        self.parent: Optional[_GraphNode] = None
-        self.children: List[_GraphNode] = []
+        self.parent: Optional[Node] = None
+        self.children: List[Node] = []
 
     @property
     def data(self):
@@ -86,7 +86,7 @@ class _GraphNode(ABC):
             node.print_graph(depth=depth + 1)
 
 
-class _CallableNode(_GraphNode, ABC):
+class CallableNode(Node, ABC):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -104,13 +104,13 @@ class _CallableNode(_GraphNode, ABC):
         args = []
         kwargs = {}
         for arg in self.args:
-            if isinstance(arg, _Fixture):
+            if isinstance(arg, Fixture):
                 assert arg in fixtures
                 args.append(arg.context_manager())
             else:
                 args.append(arg)
         for key, val in self.kwargs:
-            if isinstance(val, _Fixture):
+            if isinstance(val, Fixture):
                 assert val in fixtures
                 kwargs[key] = val.context_manager()
             else:
@@ -119,12 +119,12 @@ class _CallableNode(_GraphNode, ABC):
 
 
 # FIXME: Should this inherit from _GraphNode?
-class _Suite(_GraphNode):
+class Suite(Node):
 
     def __init__(self, model: Model, func):
         super().__init__(model)
         self._func = func
-        self.fixture_stack: Stack[_Fixture] = Stack()
+        self.fixture_stack: Stack[Fixture] = Stack()
 
     @property
     def data(self):
@@ -140,7 +140,7 @@ class _Suite(_GraphNode):
         self._func()
         self.model.current_suite = None
 
-    def add(self, node: _GraphNode):
+    def add(self, node: Node):
         node.root = self.root
         if self.fixture_stack.empty():
             node.parent = self
@@ -149,7 +149,7 @@ class _Suite(_GraphNode):
             self.fixture_stack.top().add(node)
 
 
-class _Fixture(_CallableNode):
+class Fixture(CallableNode):
     def __init__(self, model: 'Model', cm):
         super().__init__(model)
         self._cm = cm
@@ -169,7 +169,7 @@ class _Fixture(_CallableNode):
     #     """
     #     raise CutestError('Fixtures can only be used within tests')
 
-    def initialize(self, fixtures: Set['_Fixture']):
+    def initialize(self, fixtures: Set['Fixture']):
         """
         A fixture must be initialized before it's underlying context manager
         can be used
@@ -205,7 +205,7 @@ class _Fixture(_CallableNode):
         self.children.append(test_)
 
 
-class _Concurrent(_GraphNode):
+class Concurrent(Node):
     # TODO: Finish implementing me. Inherit from _Fixture instead?
     # Latest idea is to have this point to a runner class, not take in
     # executor
@@ -220,7 +220,7 @@ class _Concurrent(_GraphNode):
         return self.executor
 
 
-class _Test(_CallableNode):
+class Test(CallableNode):
     def __init__(self, model: Model, func):
         super().__init__(model)
         self._func = func
@@ -235,7 +235,7 @@ class _Test(_CallableNode):
         else:
             self.model.current_suite.add(self)
 
-    def run(self, fixtures: Set[_Fixture]):
+    def run(self, fixtures: Set[Fixture]):
         # TODO: Maybe log something here about the test that's running
         args, kwargs = self._replace_args(fixtures)
         try:
@@ -255,21 +255,21 @@ class _Test(_CallableNode):
 class Runner:
 
     def __init__(self):
-        self.passes: List[Tuple[_Test, None]] = []
-        self.fails: List[Tuple[_Test, Exception]] = []
+        self.passes: List[Tuple[Test, None]] = []
+        self.fails: List[Tuple[Test, Exception]] = []
 
-    def run_suites(self, suites: Iterable[_Suite]):
-        for suite_ in suites:
-            self.run(suite_)
+    def run_suites(self, suites: Iterable[Suite]):
+        for suite in suites:
+            self.run(suite)
 
-    def run(self, suite_: _Suite):
-        assert suite_.root is suite_
-        print('Running test suite %s', suite_)
-        suite_.print_graph()
-        self.recursive_run(suite_, fixtures=set())
+    def run(self, suite: Suite):
+        assert suite.root is suite
+        print('Running test suite %s', suite)
+        suite.print_graph()
+        self.recursive_run(suite, fixtures=set())
 
-    def recursive_run(self, node: _GraphNode, fixtures: Set[_Fixture]):
-        if isinstance(node, _Test):
+    def recursive_run(self, node: Node, fixtures: Set[Fixture]):
+        if isinstance(node, Test):
             # TODO: What about skipping? Maybe we should trim tree. This would
             # avoid initializing fixtures unnecessarily
             success, result = node.run(fixtures)
@@ -281,20 +281,20 @@ class Runner:
                 assert isinstance(result, Exception)
                 self.fails.append((node, result))
             assert len(node.children) == 0
-        elif isinstance(node, _Fixture):
+        elif isinstance(node, Fixture):
             node.initialize(fixtures)
             fixtures.add(node)
             for child in node.children:
                 self.recursive_run(child, fixtures)
             fixtures.remove(node)
-        elif isinstance(node, _Concurrent):
+        elif isinstance(node, Concurrent):
             with node.executor as executor:
                 # FIXME: This only runs children concurrently. Executor should
                 # be passed on recursively and _Sequential should be added
                 # which would set recursive exec to None. What about sub-concurrent calls?
                 for child in node.children:
                     executor.submit(self.recursive_run, child, fixtures)
-        elif isinstance(node, _Suite):
+        elif isinstance(node, Suite):
             assert node.root is node, "Cannot handle sub-suites yet"
             for child in node.children:
                 self.recursive_run(child, fixtures)
@@ -307,10 +307,10 @@ def main(argv):
     module = importlib.import_module(module_name)
     suites = []
     for member in inspect.getmembers(module):
-        if isinstance(member, _Suite):
+        if isinstance(member, Suite):
             suites.append(member)
-    for suite_ in suites:
-        suite_.initialize()
+    for suite in suites:
+        suite.initialize()
     runner = Runner()
     runner.run_suites(suites)
 
