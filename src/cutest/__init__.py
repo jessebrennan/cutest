@@ -1,3 +1,4 @@
+import argparse
 import importlib
 import inspect
 import logging
@@ -313,16 +314,22 @@ class Runner:
 
 
 def main(argv):
-    module_name = argv[0]
-    module = importlib.import_module(module_name)
-    suites = []
-    for member in inspect.getmembers(module):
-        if isinstance(member, Suite):
-            suites.append(member)
-    for suite in suites:
-        suite.initialize()
-    runner = Runner()
-    runner.run_suites(suites)
+    # module_name = argv[0]
+    # module = importlib.import_module(module_name)
+    # suites = []
+    # for member in inspect.getmembers(module):
+    #     if isinstance(member, Suite):
+    #         suites.append(member)
+    # for suite in suites:
+    #     suite.initialize()
+    # runner = Runner()
+    # runner.run_suites(suites)
+
+    parser = argparse.ArgumentParser(description='Run unit tests with cutest')
+    parser.add_argument('--verbose', '-v', action='count', default=0)
+    parser.add_argument('tests', nargs='*',
+                        description='a list of any number of test modules, classes, and test methods')
+    parser.parse_args(argv)
 
 
 class CutestError(Exception):
