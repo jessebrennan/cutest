@@ -268,8 +268,8 @@ class Runner:
         self.passes: List[Tuple[Test, None]] = []
         self.fails: List[Tuple[Test, Exception]] = []
 
-    def run_suites(self, suites: Iterable[Suite]):
-        for suite in suites:
+    def run_model(self, model: Model):
+        for suite in model.suites:
             self.run(suite)
 
     def run(self, suite: Suite):
