@@ -6,6 +6,8 @@ import sys
 from abc import ABC
 from concurrent.futures import Executor
 from contextlib import contextmanager
+from copy import copy
+from itertools import accumulate, chain
 from typing import List, Optional, Iterable, Set, Tuple, Mapping
 
 from cutest.util import Stack
@@ -47,15 +49,15 @@ class Model:
     def fixture(self, obj):
         if inspect.isclass(obj):
             # FIXME: assert has __enter__ and __exit__
-            return FixtureFactory(self, obj)
+            return FixtureDefinition(self, obj)
         elif inspect.isgeneratorfunction(obj):
             cm = contextmanager(obj)
-            return FixtureFactory(self, cm)
+            return FixtureDefinition(self, cm)
         else:
             raise CutestError('fixture must decorate a contextmanager or generator')
 
     def test(self, func):
-        return TestFactory(self, func)
+        return TestDefinition(self, func)
 
     def initialize(self):
         """
@@ -85,6 +87,16 @@ class Node(ABC):
         print('  ' * depth, self.__class__.__name__, self.data.__name__)
         for node in self.children:
             node.print_graph(depth=depth + 1)
+
+    def prune_all_but(self, nodes: Iterable['Node']) -> bool:
+        """
+        Prune children unless they are in nodes or ancestors of nodes.
+
+        Return if this node should be saved
+        """
+        save_children = [c for c in self.children if c.prune_all_but(nodes)]
+        self.children = save_children
+        return self in nodes or any(save_children)
 
 
 class CallableNode(Node, ABC):
@@ -122,7 +134,7 @@ class Suite(Node):
     def __init__(self, model: Model, func):
         super().__init__(model)
         self._func = func
-        self.fixture_stack: Stack[FixtureFactory] = Stack()
+        self.fixture_stack: Stack[Fixture] = Stack()
 
     @property
     def data(self):
@@ -147,7 +159,7 @@ class Suite(Node):
             self.fixture_stack.top().add(node)
 
 
-class FixtureFactory:
+class FixtureDefinition:
 
     def __init__(self, model: Model, cm):
         self.model = model
@@ -224,16 +236,17 @@ class Concurrent(Node):
         return self.executor
 
 
-class TestFactory:
+class TestDefinition:
 
     def __init__(self, model: Model, func):
         self.model = model
         self._func = func
+        self.calls: List[Test] = []
 
     def __call__(self, *args, **kwargs):
         self.args = args
         self.kwargs = kwargs
-        Test(self._func, self.model, args, kwargs)
+        self.calls.append(Test(self._func, self.model, args, kwargs))
 
 
 class Test(CallableNode):
@@ -313,6 +326,64 @@ class Runner:
             assert False
 
 
+class Collection:
+
+    def __init__(self):
+        self.models: List[Model] = []
+        self.suites: List[Suite] = []
+        self.tests: List[Test] = []
+
+    def add_tests(self, test_ids: List[str]):
+        for test_id in test_ids:
+            parts = test_id.split('.')
+            module = importlib.import_module(parts[0])
+            mod_index = 1
+            for i in range(1, len(parts)):
+                mod_name = '.'.join(parts[1:i])
+                try:
+                    module = importlib.import_module(mod_name)
+                except ModuleNotFoundError:
+                    mod_index = i
+                    break
+            obj, *attrs = parts[mod_index:]
+            obj = getattr(module, obj)
+            if isinstance(obj, Model):
+                assert len(attrs) == 0, f"Specifying tests beneath a Model {obj} is not supported, {test_id}"
+                obj.initialize()
+                self.models.append(obj)
+            elif isinstance(obj, Suite):
+                obj.model.initialize()
+                if len(attrs):
+                    raise CutestError(f"Specifying tests beneath a Suite {obj} is not YET supported, {test_id}")
+                else:
+                    self.suites.append(obj)
+            elif isinstance(obj, TestDefinition):
+                obj.model.initialize()
+                self.tests.append(obj.calls)
+
+    def suites_to_run(self) -> List[Suite]:
+        suites = list(chain.from_iterable((model.suites for model in self.models)))
+        for suite in self.suites:
+            if suite in suites:
+                log.warning('Suite %s is already covered by a model', suite)
+            else:
+                suites.append(suite)
+        for suite in self.pruned_suites():
+            if suite in suites:
+                log.warning('Suite %s is already covered by a model', suite)
+            else:
+                suites.append(suite)
+        return suites
+
+    def pruned_suites(self):
+        raw_suites = set(copy(t.root) for t in self.tests)
+        assert None not in raw_suites
+        for suite in raw_suites:
+            suite.initialize()
+            if suite.prune_all_but(self.tests):
+                yield suite
+
+
 def main(argv):
     # module_name = argv[0]
     # module = importlib.import_module(module_name)
@@ -327,9 +398,16 @@ def main(argv):
 
     parser = argparse.ArgumentParser(description='Run unit tests with cutest')
     parser.add_argument('--verbose', '-v', action='count', default=0)
-    parser.add_argument('tests', nargs='*',
-                        description='a list of any number of test modules, classes, and test methods')
-    parser.parse_args(argv)
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument('tests', nargs='*',
+                       description='a list of any number of test modules, suites, and test methods')
+    options = parser.parse_args(argv)
+    collection = Collection()
+    collection.add_tests(options.tests)
+    runner = Runner()
+    runner.run(collection.suites_to_run())
+
+
 
 
 class CutestError(Exception):

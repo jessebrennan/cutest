@@ -14,11 +14,13 @@ def main(argv):
     # runner = Runner()
     # runner.run_suites(suites)
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--verbose', '-v', action='count', default=0,
-                        help='output verbosity; more vs (up to 3) for more verbosity')
-    parser.add_argument('tests', nargs='*',
-                        help='a list of any number of test modules, classes, and test methods')
+    parser = argparse.ArgumentParser(description='Run unit tests with cutest')
+    parser.add_argument('--verbose', '-v', action='count', default=0)
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument('tests', nargs='*',
+                       help='a list of any number of test modules, suites, and test methods')
+    group.add_argument('-d', '--discover', metavar='DIRECTORY', default='.',
+                       help='directory to start test discovery')
     options = parser.parse_args(argv)
 
 
