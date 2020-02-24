@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import re
 import sys
+import textwrap
 
 #
 # a basic release automation script
@@ -10,15 +11,22 @@ import sys
 
 VERSION_FILE = 'VERSION'
 
-help_message = ("The argument must be formatted as either 'major', 'minor', 'patch' or 'X.X.X'\n"
-                "\n"
-                "If one of the first three options is used than that part of the version will\n"
-                "be incremented and all lesser parts of the version will be reset to 0.")
+help_message = '\n'.join(textwrap.wrap(
+    "The argument must be formatted as either 'major', 'minor', 'patch'"
+    " or 'X.X.X'\nIf one of the first three options is used than that "
+    "part of the version will be incremented and all lesser parts of "
+    "the version will be reset to 0."
+))
 
 
-def read_version():
+def read_version(string=False):
     with open(VERSION_FILE, 'r') as fp:
-        return tuple(map(int, fp.read().split('.')))
+        version_tup = tuple(map(int, fp.read().split('.')))
+        assert len(version_tup) == 3
+        if string:
+            return '.'.join(map(str, version_tup))
+        else:
+            return version_tup
 
 
 def write_version(major, minor, patch):
@@ -55,9 +63,12 @@ def main():
         exit(1)
 
     write_version(major, minor, patch)
-    print(f'New version successfully set to {major}.{minor}.{patch}. To finish release, commit\n'
-          'changes. Then create a release on github with this version number. Travis will\n'
-          'automatically upload to PyPI')
+    print('\n'.join(textwrap.wrap(
+        f'New version successfully set to {major}.{minor}.{patch}. To '
+        'finish release, commit changes. Then create a release on '
+        'github with this version number. Travis will automatically '
+        'upload to PyPI'
+    )))
 
 
 if __name__ == '__main__':

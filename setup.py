@@ -12,7 +12,7 @@ with open(path.join(here, 'README.md'), encoding='utf-8') as f:
 
 setup(
     name='cutest',
-    version='{}.{}.{}'.format(*read_version()),
+    version=read_version(string=True),
     description='A cute, composable unit test framework for Python',
     long_description=long_description,
     long_description_content_type='text/markdown',
