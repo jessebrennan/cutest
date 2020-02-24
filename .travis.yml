@@ -9,6 +9,6 @@ deploy:
   provider: pypi
   on:
     tags: true
-  user: jessebrennan
+  user: __token__
   password:
-    'foo'
+    secure: VZNwA6/bF2YdzkuIVU+QOdkL67BOIRdreKv5VtT3VB/f170XtEpAtXVeAW52XVDZ0rLMYRB8oVrdPiW+98sW9F+zQwXZ1kw7PQmVUdJhNAPvvps8UuNoyf+3rmk7BfrrZuzjTmczk6Ls5A7pR8/o2jNGX0P4QeoIbj9TWiJiOJGkWDh5P+FHuAXSC9MNP9FGMVC1Z2N5gQ4s6xIOOjVgaLT4q/1s0BMZSZfQlPKwBg4zlaSnO4Ui+awippjKDpjIHSwB2DJZs49t5469oH/enf/jm8Dbo8HwJpzH8A2nVjMXVtNfukWBZdEA6qF31C0HpTmIc3xF6VrEzNnDM5d6xNWsdece3+v4QsUumIrFtVkSLvC79KZlNmr1Az5vC51dAIivvsLbE5aVy/SHYzUF3rum5fTQXLtDzDhOgvODLq+pbicKFYyDub8jSBr8bipUHzdNUBXYZl4HGOI7n+olCULdOVIMMMW8m42PD7VOqTA2j6fk0rod/URhAlFlRliRrPGKpsuTLR9Vq6MQhnkO94WmFvWarWT0+ff6zl7ocshgExAcdBnfkrRCp5VGmSuFHPjwcMoHNZgGSTiMXZg2gmD8Osz/AUF4WEunvT4OpfpufwXepN/RoQrvJ2ON2r3e6VOZce90P3bK7cSN8IeYC52DCdBoloezylmV0cyDkiA=
