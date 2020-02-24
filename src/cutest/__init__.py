@@ -75,7 +75,7 @@ class Node(ABC):
     """
     def __init__(self, model: Model):
         self.model = model
-        # root is set when a node is added to a _Suite
+        # root is set when a node is added to a Suite
         self.root: Optional[Suite] = None
         # parent is set when a node is added to a node
         self.parent: Optional[Node] = None
@@ -195,14 +195,13 @@ class Fixture(CallableNode):
         self.cm = cm
         self._initialized_cm = None
 
-    # FIXME: This seems to cause some problems, at least with Jupyter
-    # def __getattr__(self, item):
-    #     """
-    #     Fixtures need to be substituted with the underlying context manager
-    #     before they can be used by the user. This can only happen inside of a
-    #     test (or while initializing another fixture).
-    #     """
-    #     raise CutestError('Fixtures can only be used within tests')
+    def __getattr__(self, item):
+        """
+        Fixtures need to be substituted with the underlying context manager
+        before they can be used by the user. This can only happen inside of a
+        test (or while initializing another fixture).
+        """
+        raise CutestError('Fixtures can only be used within tests or other fixtures')
 
     def initialize(self, fixtures: Set['Fixture']):
         """
