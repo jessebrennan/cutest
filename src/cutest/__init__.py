@@ -82,8 +82,16 @@ class Node(ABC):
     def data(self):
         raise NotImplementedError
 
+    @property
+    def name(self):
+        return self.data.__name__
+
+    @property
+    def type(self):
+        return self.__class__.__name__
+
     def print_graph(self, depth=0):
-        log.info('%s%s %s', '  ' * depth, self.__class__.__name__, self.data.__name__)
+        log.info('%s%s %s', '  ' * depth, self.type, self.name)
         for node in self.children:
             node.print_graph(depth=depth + 1)
 
@@ -269,14 +277,17 @@ class Test(CallableNode):
 
     def run(self, fixtures: Set[Fixture]):
         # TODO: Maybe log something here about the test that's running
+        log.info('Running test %s', self.name)
         args, kwargs = self._replace_args(fixtures)
         try:
             result = self.func(*args, **kwargs)
         except Exception as e:
             # TODO: Log failure, here or in recursive run_suite? (probably here)
+            log.info('Test %s failed', self.name)
             return False, e
         else:
             # TODO: log success
+            log.info('Test %s passed', self.name)
             return True, result
 
     @property
@@ -397,7 +408,7 @@ class Collection:
                     obj.model.initialize()
                     self.tests += obj.calls
             else:
-                models: List[Model] = [obj for obj in vars(module) if isinstance(obj, Model)]
+                models: List[Model] = [obj for obj in vars(module).values() if isinstance(obj, Model)]
                 for model in models:
                     model.initialize()
                     self.models.append(model)
@@ -408,7 +419,7 @@ class CutestError(Exception):
 
 
 def main(argv=None):
-    if not argv:
+    if argv is not None:
         # If called programmatically (i.e. tests), we don't want to override logging info
         logging.basicConfig(level=logging.INFO)
         argv = sys.argv[1:]
