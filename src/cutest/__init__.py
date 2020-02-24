@@ -1,6 +1,8 @@
+import argparse
 import importlib
 import inspect
 import logging
+import sys
 from abc import ABC
 from concurrent.futures import Executor
 from contextlib import contextmanager
@@ -95,8 +97,11 @@ class Node(ABC):
         self.children = save_children
         return self in nodes or any(save_children)
 
-    def __eq__(self, other: 'Node'):
-        return self.data == other.data
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, Node):
+            return NotImplemented
+        else:
+            return self.data == other.data
 
     def __hash__(self):
         return hash(self.data)
@@ -392,7 +397,7 @@ class Collection:
                     obj.model.initialize()
                     self.tests += obj.calls
             else:
-                models = [obj for obj in vars(module) if isinstance(obj, Model)]
+                models: List[Model] = [obj for obj in vars(module) if isinstance(obj, Model)]
                 for model in models:
                     model.initialize()
                     self.models.append(model)
@@ -400,3 +405,20 @@ class Collection:
 
 class CutestError(Exception):
     pass
+
+
+def main(argv=None):
+    if not argv:
+        # If called programmatically (i.e. tests), we don't want to override logging info
+        logging.basicConfig(level=logging.INFO)
+        argv = sys.argv[1:]
+
+    parser = argparse.ArgumentParser(description='Run unit tests with cutest')
+    parser.add_argument('--verbose', '-v', action='count', default=0)
+    parser.add_argument('tests', nargs='*',
+                        help='a list of any number of test modules, suites, and test methods')
+    options = parser.parse_args(argv)
+    collection = Collection()
+    collection.add_tests(options.tests)
+    runner = Runner()
+    runner.run_collection(collection)

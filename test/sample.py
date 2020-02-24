@@ -61,4 +61,3 @@ class fix_2:
 
     def fix_method(self):
         print('fix_2 method')
-

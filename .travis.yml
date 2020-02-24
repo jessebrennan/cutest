@@ -1,0 +1,14 @@
+language: python
+python:
+- '3.6'
+install:
+- make develop
+script:
+- make test
+deploy:
+  provider: pypi
+  on:
+    tags: true
+  user: jessebrennan
+  password:
+    'foo'

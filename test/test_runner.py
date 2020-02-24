@@ -10,5 +10,4 @@ class RunnerTest(unittest.TestCase):
         runner = cutest.Runner()
         sample.my_suite.initialize()
         pruned = list(runner.pruned_suites(sample.test_1.calls))
-        foo = 1
-
+        self.assertEqual(len(pruned), 1)
