@@ -1,13 +1,10 @@
-import argparse
 import importlib
 import inspect
 import logging
-import sys
 from abc import ABC
 from concurrent.futures import Executor
 from contextlib import contextmanager
 from copy import copy
-from itertools import accumulate, chain
 from typing import List, Optional, Iterable, Set, Tuple, Mapping
 
 from cutest.util import Stack
@@ -84,7 +81,7 @@ class Node(ABC):
         raise NotImplementedError
 
     def print_graph(self, depth=0):
-        print('  ' * depth, self.__class__.__name__, self.data.__name__)
+        log.info('%s%s %s', '  ' * depth, self.__class__.__name__, self.data.__name__)
         for node in self.children:
             node.print_graph(depth=depth + 1)
 
@@ -97,6 +94,12 @@ class Node(ABC):
         save_children = [c for c in self.children if c.prune_all_but(nodes)]
         self.children = save_children
         return self in nodes or any(save_children)
+
+    def __eq__(self, other: 'Node'):
+        return self.data == other.data
+
+    def __hash__(self):
+        return hash(self.data)
 
 
 class CallableNode(Node, ABC):
@@ -128,7 +131,7 @@ class CallableNode(Node, ABC):
         return args, kwargs
 
 
-# FIXME: Should this inherit from _GraphNode?
+# FIXME: Should this inherit from Node?
 class Suite(Node):
 
     def __init__(self, model: Model, func):
@@ -265,7 +268,7 @@ class Test(CallableNode):
         try:
             result = self.func(*args, **kwargs)
         except Exception as e:
-            # TODO: Log failure, here or in recursive run? (probably here)
+            # TODO: Log failure, here or in recursive run_suite? (probably here)
             return False, e
         else:
             # TODO: log success
@@ -281,21 +284,46 @@ class Runner:
     def __init__(self):
         self.passes: List[Tuple[Test, None]] = []
         self.fails: List[Tuple[Test, Exception]] = []
+        self.suites_run: Set[Suite] = set()
+
+    def run_collection(self, collection: 'Collection'):
+        for model in collection.models:
+            self.run_model(model)
+        for suite in collection.suites:
+            self.run_suite(suite)
+        self.run_tests(collection.tests)
 
     def run_model(self, model: Model):
+        log.info('Running model %s', model)
         for suite in model.suites:
-            self.run(suite)
+            self.run_suite(suite)
 
-    def run(self, suite: Suite):
+    def run_suite(self, suite: Suite):
         assert suite.root is suite
-        print('Running test suite %s', suite)
-        suite.print_graph()
-        self.recursive_run(suite, fixtures=set())
+        if suite in self.suites_run:
+            log.warning('Suite %s was already run', suite)
+        else:
+            log.info('Running test suite %s', suite)
+            suite.print_graph()
+            self.suites_run.add(suite)
+            self.recursive_run(suite, fixtures=set())
+
+    def run_tests(self, tests: Iterable[Test]):
+        tests = set(tests)
+        pruned_suites = self.pruned_suites(tests)
+        for suite in pruned_suites:
+            self.run_suite(suite)
+
+    def pruned_suites(self, tests: Set[Test]):
+        raw_suites: Set[Suite] = set(copy(t.root) for t in tests)
+        assert None not in raw_suites
+        for suite in raw_suites:
+            suite.initialize()
+            if suite.prune_all_but(tests):
+                yield suite
 
     def recursive_run(self, node: Node, fixtures: Set[Fixture]):
         if isinstance(node, Test):
-            # TODO: What about skipping? Maybe we should trim tree. This would
-            # avoid initializing fixtures unnecessarily
             success, result = node.run(fixtures)
             if success:
                 assert result is None, 'Tests should not return anything'
@@ -308,8 +336,9 @@ class Runner:
         elif isinstance(node, Fixture):
             node.initialize(fixtures)
             fixtures.add(node)
-            for child in node.children:
-                self.recursive_run(child, fixtures)
+            with node.context_manager():
+                for child in node.children:
+                    self.recursive_run(child, fixtures)
             fixtures.remove(node)
         elif isinstance(node, Concurrent):
             with node.executor as executor:
@@ -342,77 +371,32 @@ class Collection:
                 mod_name = '.'.join(parts[1:i])
                 try:
                     module = importlib.import_module(mod_name)
-                except ModuleNotFoundError:
+                except (ModuleNotFoundError, ValueError):
                     mod_index = i
                     break
-            obj, *attrs = parts[mod_index:]
-            obj = getattr(module, obj)
-            if isinstance(obj, Model):
-                assert len(attrs) == 0, f"Specifying tests beneath a Model {obj} is not supported, {test_id}"
-                obj.initialize()
-                self.models.append(obj)
-            elif isinstance(obj, Suite):
-                obj.model.initialize()
-                if len(attrs):
-                    raise CutestError(f"Specifying tests beneath a Suite {obj} is not YET supported, {test_id}")
-                else:
-                    self.suites.append(obj)
-            elif isinstance(obj, TestDefinition):
-                obj.model.initialize()
-                self.tests.append(obj.calls)
-
-    def suites_to_run(self) -> List[Suite]:
-        suites = list(chain.from_iterable((model.suites for model in self.models)))
-        for suite in self.suites:
-            if suite in suites:
-                log.warning('Suite %s is already covered by a model', suite)
+            rest = parts[mod_index:]
+            if rest:
+                obj, *attrs = rest
+                obj = getattr(module, obj)
+                if isinstance(obj, Model):
+                    assert len(attrs) == 0, f"Specifying tests beneath a Model {obj} is not supported, {test_id}"
+                    obj.initialize()
+                    self.models.append(obj)
+                elif isinstance(obj, Suite):
+                    obj.model.initialize()
+                    if len(attrs):
+                        raise CutestError(f"Specifying tests beneath a Suite {obj} is not YET supported, {test_id}")
+                    else:
+                        self.suites.append(obj)
+                elif isinstance(obj, TestDefinition):
+                    obj.model.initialize()
+                    self.tests += obj.calls
             else:
-                suites.append(suite)
-        for suite in self.pruned_suites():
-            if suite in suites:
-                log.warning('Suite %s is already covered by a model', suite)
-            else:
-                suites.append(suite)
-        return suites
-
-    def pruned_suites(self):
-        raw_suites = set(copy(t.root) for t in self.tests)
-        assert None not in raw_suites
-        for suite in raw_suites:
-            suite.initialize()
-            if suite.prune_all_but(self.tests):
-                yield suite
-
-
-def main(argv):
-    # module_name = argv[0]
-    # module = importlib.import_module(module_name)
-    # suites = []
-    # for member in inspect.getmembers(module):
-    #     if isinstance(member, Suite):
-    #         suites.append(member)
-    # for suite in suites:
-    #     suite.initialize()
-    # runner = Runner()
-    # runner.run_suites(suites)
-
-    parser = argparse.ArgumentParser(description='Run unit tests with cutest')
-    parser.add_argument('--verbose', '-v', action='count', default=0)
-    group = parser.add_mutually_exclusive_group()
-    group.add_argument('tests', nargs='*',
-                       description='a list of any number of test modules, suites, and test methods')
-    options = parser.parse_args(argv)
-    collection = Collection()
-    collection.add_tests(options.tests)
-    runner = Runner()
-    runner.run(collection.suites_to_run())
-
-
+                models = [obj for obj in vars(module) if isinstance(obj, Model)]
+                for model in models:
+                    model.initialize()
+                    self.models.append(model)
 
 
 class CutestError(Exception):
     pass
-
-
-if __name__ == '__main__':
-    main(sys.argv[1:])
