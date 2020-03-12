@@ -8,15 +8,15 @@ from test import sample
 class SmokeTest(unittest.TestCase):
 
     def test_sample_module(self):
-        runner = cutest.Runner()
+        runner = cutest.SerialRunner()
         sample.cu.initialize()
         runner.run_model(sample.cu)
 
     def test_sample_suite(self):
-        runner = cutest.Runner()
+        runner = cutest.SerialRunner()
         sample.my_suite.initialize()
         runner.run_suite(sample.my_suite)
 
     def test_sample_tests(self):
-        runner = cutest.Runner()
+        runner = cutest.SerialRunner()
         runner.run_tests(sample.test_1.calls)

@@ -3,11 +3,11 @@ import importlib
 import inspect
 import logging
 import sys
-from abc import ABC
-from concurrent.futures import Executor
+from abc import ABC, ABCMeta, abstractmethod
+from concurrent.futures import Executor, Future
 from contextlib import contextmanager
 from copy import copy
-from typing import List, Optional, Iterable, Set, Tuple, Mapping
+from typing import List, Optional, Iterable, Set, Tuple, Mapping, Type, Callable, Union
 
 from cutest.util import Stack
 
@@ -38,6 +38,7 @@ log = logging.getLogger(__name__)
 
 
 class Model:
+
     def __init__(self):
         # Used to track the suite when building the graph
         self.current_suite: Optional[Suite] = None
@@ -48,9 +49,12 @@ class Model:
         self.suites.append(suite)
         return suite
 
-    def fixture(self, obj):
-        if inspect.isclass(obj):
-            # FIXME: assert has __enter__ and __exit__
+    def fixture(self, obj) -> 'FixtureDefinition':
+        if (
+                inspect.isclass(obj)
+                and hasattr(obj, '__enter__')
+                and hasattr(obj, '__exit__')
+        ):
             return FixtureDefinition(self, obj)
         elif inspect.isgeneratorfunction(obj):
             cm = contextmanager(obj)
@@ -58,8 +62,20 @@ class Model:
         else:
             raise CutestError('fixture must decorate a contextmanager or generator')
 
-    def test(self, func):
+    def test(self, func: Callable) -> 'TestDefinition':
         return TestDefinition(self, func)
+
+    def serial(self):
+        return self.runner(SerialRunner)
+
+    def threads(self):
+        raise NotImplementedError()
+
+    def processes(self):
+        raise NotImplementedError()
+
+    def runner(self, runner: Type['Runner']) -> 'RunnerNode':
+        return RunnerNode(self, runner)
 
     def initialize(self):
         """
@@ -81,6 +97,7 @@ class Node(ABC):
         self.parent: Optional[Node] = None
         self.children: List[Node] = []
 
+    @abstractmethod
     @property
     def data(self):
         raise NotImplementedError
@@ -116,6 +133,11 @@ class Node(ABC):
 
     def __hash__(self):
         return hash(self.data)
+
+    # TODO: evaluate consequences of moving this up
+    def add(self, node):
+        node.parent = self
+        self.children.append(node)
 
 
 class CallableNode(Node, ABC):
@@ -153,7 +175,8 @@ class Suite(Node):
     def __init__(self, model: Model, func):
         super().__init__(model)
         self._func = func
-        self.fixture_stack: Stack[Fixture] = Stack()
+        # FIXME: make the type non-leaf Node
+        self.parent_stack: Stack[Union[Fixture, RunnerNode]] = Stack()
 
     @property
     def data(self):
@@ -162,7 +185,7 @@ class Suite(Node):
     def initialize(self):
         # Reset children to make this method idempotent
         self.children = []
-        assert self.fixture_stack.empty()
+        assert self.parent_stack.empty()
         self.root = self
         self.parent = None
         self.model.current_suite = self
@@ -171,11 +194,10 @@ class Suite(Node):
 
     def add(self, node: Node):
         node.root = self.root
-        if self.fixture_stack.empty():
-            node.parent = self
-            self.children.append(node)
+        if self.parent_stack.empty():
+            super().add(node)
         else:
-            self.fixture_stack.top().add(node)
+            self.parent_stack.top().add(node)
 
 
 class FixtureDefinition:
@@ -221,22 +243,15 @@ class Fixture(CallableNode):
     def data(self):
         return self.cm
 
-    def add(self, node):
-        node.parent = self
-        self.children.append(node)
-
     def __enter__(self):
         self.model.current_suite.add(self)
-        self.model.current_suite.fixture_stack.add(self)
+        self.model.current_suite.parent_stack.add(self)
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        fixture_ = self.model.current_suite.fixture_stack.pop()
+        fixture_ = self.model.current_suite.parent_stack.pop()
         assert fixture_ is self
         return False
-
-    def add_test(self, test_):
-        self.children.append(test_)
 
 
 class Concurrent(Node):
@@ -296,13 +311,16 @@ class Test(CallableNode):
     def data(self):
         return self.func
 
+    def add(self, node):
+        raise CutestError('Tests should not have child nodes')
 
-class Runner:
+
+class Runner(metaclass=ABCMeta):
 
     def __init__(self):
         self.passes: List[Tuple[Test, None]] = []
         self.fails: List[Tuple[Test, Exception]] = []
-        self.suites_run: Set[Suite] = set()
+        self.__suites_ran: Set[Suite] = set()
 
     def run_collection(self, collection: 'Collection'):
         for model in collection.models:
@@ -315,16 +333,6 @@ class Runner:
         log.info('Running model %s', model)
         for suite in model.suites:
             self.run_suite(suite)
-
-    def run_suite(self, suite: Suite):
-        assert suite.root is suite
-        if suite in self.suites_run:
-            log.warning('Suite %s was already run', suite)
-        else:
-            log.info('Running test suite %s', suite)
-            suite.print_graph()
-            self.suites_run.add(suite)
-            self.recursive_run(suite, fixtures=set())
 
     def run_tests(self, tests: Iterable[Test]):
         tests = set(tests)
@@ -340,37 +348,112 @@ class Runner:
             if suite.prune_all_but(tests):
                 yield suite
 
-    def recursive_run(self, node: Node, fixtures: Set[Fixture]):
+    def run_suite(self, suite: Suite):
+        assert suite.root is suite
+        if suite in self.__suites_ran:
+            log.warning('Suite %s was already run', suite)
+        else:
+            log.info('Running test suite %s', suite)
+            suite.print_graph()
+            self.__suites_ran.add(suite)
+            self.run(suite, fixtures=set())
+
+    def run(self, node: Union['RunnerNode', Suite], fixtures: Set[Fixture]):
+        """
+        All public run methods must go through this one
+        """
+        self._recursive_run(node, fixtures)
+
+    def _recursive_run(self, node: Node, fixtures: Set[Fixture]):
         if isinstance(node, Test):
-            success, result = node.run(fixtures)
-            if success:
-                assert result is None, 'Tests should not return anything'
-                self.passes.append((node, result))
-            else:
-                # TODO: Should be BaseException?
-                assert isinstance(result, Exception)
-                self.fails.append((node, result))
-            assert len(node.children) == 0
+            self._run_test(node, fixtures)
         elif isinstance(node, Fixture):
-            node.initialize(fixtures)
-            fixtures.add(node)
-            with node.context_manager():
-                for child in node.children:
-                    self.recursive_run(child, fixtures)
-            fixtures.remove(node)
-        elif isinstance(node, Concurrent):
-            with node.executor as executor:
-                # FIXME: This only runs children concurrently. Executor should
-                # be passed on recursively and _Sequential should be added
-                # which would set recursive exec to None. What about sub-concurrent calls?
-                for child in node.children:
-                    executor.submit(self.recursive_run, child, fixtures)
+            self._run_fixture(node, fixtures)
         elif isinstance(node, Suite):
-            assert node.root is node, "Cannot handle sub-suites yet"
-            for child in node.children:
-                self.recursive_run(child, fixtures)
+            self._run_suite(node, fixtures)
+        elif isinstance(node, RunnerNode):
+            self._run_runner_node(node, fixtures)
         else:
             assert False
+
+    def _run_test(self, node: Test, fixtures: Set[Fixture]):
+        success, result = node.run(fixtures)
+        if success:
+            assert result is None, 'Tests should not return anything'
+            self.passes.append((node, result))
+        else:
+            # TODO: Should be BaseException?
+            assert isinstance(result, Exception)
+            self.fails.append((node, result))
+        assert len(node.children) == 0
+
+    def _run_fixture(self, node: Fixture, fixtures: Set[Fixture]):
+        node.initialize(fixtures)
+        fixtures.add(node)
+        with node.context_manager():
+            for child in node.children:
+                self._recursive_run(child, fixtures)
+        fixtures.remove(node)
+
+    def _run_suite(self, node: Suite, fixtures: Set[Fixture]):
+        assert node.root is node, "Cannot handle sub-suites yet"
+        for child in node.children:
+            self._recursive_run(child, fixtures)
+
+    def _run_runner_node(self, node: 'RunnerNode', fixtures):
+        runner = node.runner_cls()
+        # FIXME: this is an infinite loop. Change run to avoid this
+        runner.run(node, fixtures)
+        self.passes += runner.passes
+        self.fails += runner.fails
+
+
+class SerialRunner(Runner):
+    pass
+
+
+class ExecutorRunner(Runner):
+
+    def __init__(self, executor: Executor):
+        super().__init__()
+        # TODO: Should this be an executor class??
+        self.executor: Executor = executor
+        self.futures: List[Future] = []
+
+    def run(self, node: Union['RunnerNode', Suite], fixtures: Set[Fixture]):
+        with self.executor:
+            super().run(node, fixtures)
+        # FIXME: Do we need (to wait for / to even save) futures? Do they return anything?
+
+    def _run_test(self, node: Test, fixtures: Set[Fixture]):
+        future = self.executor.submit(super()._run_test, node, fixtures)
+        self.futures.append(future)
+
+    def _run_fixture(self, node: Test, fixtures: Set[Fixture]):
+        future = self.executor.submit(super()._run_test, node, fixtures)
+        self.futures.append(future)
+
+
+class RunnerNode(Node):
+
+    def __init__(self, model: Model, runner_cls: Type[Runner]):
+        super().__init__(model)
+        self.runner_cls: Type[Runner] = runner_cls
+
+    # Extract next 2? methods into non-leaf Node class
+    def __enter__(self):
+        self.model.current_suite.add(self)
+        self.model.current_suite.parent_stack.add(self)
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        node = self.model.current_suite.parent_stack.pop()
+        assert node is self
+        return False
+
+    @property
+    def data(self):
+        return self.runner_cls
 
 
 class Collection:
@@ -433,5 +516,5 @@ def main(argv=None):
     options = parser.parse_args(argv)
     collection = Collection()
     collection.add_tests(options.tests)
-    runner = Runner()
+    runner = SerialRunner()
     runner.run_collection(collection)

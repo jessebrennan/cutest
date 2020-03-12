@@ -10,7 +10,8 @@ def my_suite():
         test_2()
         with fix_2() as f2:
             test_3(f2)
-            test_4()
+            with cu.serial():
+                test_4()
         test_5()
 
 
