@@ -4,7 +4,7 @@ import inspect
 import logging
 import sys
 from abc import ABC, abstractmethod
-from concurrent.futures import Executor, Future
+from concurrent.futures import Executor
 from contextlib import contextmanager, ExitStack
 from copy import copy
 from typing import (
@@ -289,21 +289,6 @@ class Fixture(CallableNode):
         return False
 
 
-class Concurrent(Node):
-    # TODO: Finish implementing me. Inherit from _Fixture instead?
-    # Latest idea is to have this point to a runner class, not take in
-    # executor
-
-    def __init__(self, model: Model, executor: Executor):
-        # FIXME: What about model for this guy?
-        super().__init__(model)
-        self.executor = executor
-
-    @property
-    def data(self):
-        return self.executor
-
-
 class TestDefinition:
 
     def __init__(self, model: Model, func):
@@ -396,9 +381,11 @@ class Runner(ABC):
 
     def run(self, node: Union['RunnerNode', Suite], fixtures: Set[Fixture]):
         """
-        All public run methods must go through this one
+        All public run methods must go through this one.
         """
-        self._recursive_run(node, fixtures)
+        assert isinstance(node, Suite) or isinstance(node, RunnerNode)
+        for child in node.children:
+            self._recursive_run(child, fixtures)
 
     def _recursive_run(self, node: Node, fixtures: Set[Fixture]):
         if isinstance(node, Test):
@@ -432,13 +419,10 @@ class Runner(ABC):
         fixtures.remove(node)
 
     def _run_suite(self, node: Suite, fixtures: Set[Fixture]):
-        assert node.root is node, "Cannot handle sub-suites yet"
-        for child in node.children:
-            self._recursive_run(child, fixtures)
+        raise CutestError("Suites can only be root of graph")
 
-    def _run_runner_node(self, node: 'RunnerNode', fixtures):
+    def _run_runner_node(self, node: 'RunnerNode', fixtures: Set[Fixture]):
         runner = node.runner_cls()
-        # FIXME: this is an infinite loop. Change run to avoid this
         runner.run(node, fixtures)
         self.passes += runner.passes
         self.fails += runner.fails
@@ -450,24 +434,21 @@ class SerialRunner(Runner):
 
 class ExecutorRunner(Runner):
 
-    def __init__(self, executor: Executor):
+    def __init__(self, executor_class: Type[Executor]):
         super().__init__()
-        # TODO: Should this be an executor class??
-        self.executor: Executor = executor
-        self.futures: List[Future] = []
+        self.executor: Executor = executor_class()
+        # We can't share executors between runners since executors are
+        # not re-entrant
 
     def run(self, node: Union['RunnerNode', Suite], fixtures: Set[Fixture]):
         with self.executor:
             super().run(node, fixtures)
-        # FIXME: Do we need (to wait for / to even save) futures? Do they return anything?
 
     def _run_test(self, node: Test, fixtures: Set[Fixture]):
-        future = self.executor.submit(super()._run_test, node, fixtures)
-        self.futures.append(future)
+        self.executor.submit(super()._run_test, node, fixtures)
 
-    def _run_fixture(self, node: Test, fixtures: Set[Fixture]):
-        future = self.executor.submit(super()._run_test, node, fixtures)
-        self.futures.append(future)
+    def _run_fixture(self, node: Fixture, fixtures: Set[Fixture]):
+        self.executor.submit(super()._run_fixture, node, fixtures)
 
 
 class RunnerNode(Node):
