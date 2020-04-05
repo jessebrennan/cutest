@@ -22,9 +22,6 @@ from typing import (
 
 from cutest.util import Stack
 
-from release import read_version
-
-__version__ = read_version(string=True)
 
 """
 Outstanding things:
