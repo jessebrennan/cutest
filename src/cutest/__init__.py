@@ -5,9 +5,9 @@ import logging
 import sys
 from abc import ABC, ABCMeta, abstractmethod
 from concurrent.futures import Executor, Future
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 from copy import copy
-from typing import List, Optional, Iterable, Set, Tuple, Mapping, Type, Callable, Union
+from typing import List, Optional, Iterable, Set, Tuple, Mapping, Type, Callable, Union, ContextManager
 
 from cutest.util import Stack
 
@@ -175,6 +175,22 @@ class CallableNode(Node, ABC):
             else:
                 kwargs[key] = val
         return args, kwargs
+
+
+@contextmanager
+def combine(*context_managers: ContextManager):
+    """
+    Context manager combinator, used mainly to save indentation
+
+    Context managers are entered in argument-order and exited in the
+    opposite order. The return values of enter are returned as a list
+    from __enter__()
+    """
+    with ExitStack() as stack:
+        contexts = []
+        for cm in context_managers:
+            contexts.append(stack.enter_context(cm))
+        yield contexts
 
 
 # FIXME: Should this inherit from Node?
