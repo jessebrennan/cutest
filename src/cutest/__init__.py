@@ -7,7 +7,18 @@ from abc import ABC, abstractmethod
 from concurrent.futures import Executor, Future
 from contextlib import contextmanager, ExitStack
 from copy import copy
-from typing import List, Optional, Iterable, Set, Tuple, Mapping, Type, Callable, Union, ContextManager
+from typing import (
+    List,
+    Optional,
+    Iterable,
+    Set,
+    Tuple,
+    Mapping,
+    Type,
+    Callable,
+    Union,
+    ContextManager,
+)
 
 from cutest.util import Stack
 
