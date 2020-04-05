@@ -50,6 +50,14 @@ class Model:
         return suite
 
     def fixture(self, obj) -> 'FixtureDefinition':
+        """
+        Decorate a class context manager or a generator function to
+        make it a test fixture.
+
+        If decorating a generator function, yield once inside of a try
+        block. Any cleanup should happen inside of an attached finally
+        block.
+        """
         if (
                 inspect.isclass(obj)
                 and hasattr(obj, '__enter__')
