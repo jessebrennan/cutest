@@ -3,7 +3,7 @@ import importlib
 import inspect
 import logging
 import sys
-from abc import ABC, ABCMeta, abstractmethod
+from abc import ABC, abstractmethod
 from concurrent.futures import Executor, Future
 from contextlib import contextmanager, ExitStack
 from copy import copy
@@ -339,7 +339,8 @@ class Test(CallableNode):
         raise CutestError('Tests should not have child nodes')
 
 
-class Runner(metaclass=ABCMeta):
+# FIXME: Should this even be abstract?
+class Runner(ABC):
 
     def __init__(self):
         self.passes: List[Tuple[Test, None]] = []
