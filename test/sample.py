@@ -1,3 +1,5 @@
+import time
+
 from cutest import Model
 
 cu = Model()
@@ -10,8 +12,9 @@ def my_suite():
         test_2()
         with fix_2() as f2:
             test_3(f2)
-            with cu.serial():
+            with cu.threads():
                 test_4()
+                test_1()
         test_5()
 
 
@@ -34,7 +37,9 @@ def test_3(f2):
 
 @cu.test
 def test_4():
-    print('test 4')
+    print('test 4 start')
+    time.sleep(.1)
+    print('test 4 end')
 
 
 @cu.test

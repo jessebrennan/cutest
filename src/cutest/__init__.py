@@ -3,8 +3,12 @@ import importlib
 import inspect
 import logging
 import sys
-from abc import ABC, abstractmethod
-from concurrent.futures import Executor
+from abc import ABC
+from concurrent.futures import (
+    Executor,
+    ThreadPoolExecutor,
+    ProcessPoolExecutor,
+)
 from contextlib import contextmanager, ExitStack
 from copy import copy
 from typing import (
@@ -85,13 +89,13 @@ class Model:
         return self.runner(SerialRunner)
 
     def threads(self):
-        raise NotImplementedError()
+        return self.runner(ThreadRunner)
 
     def processes(self):
-        raise NotImplementedError()
+        return self.runner(ProcessRunner)
 
-    def runner(self, runner: Type['Runner']) -> 'RunnerNode':
-        return RunnerNode(self, runner)
+    def runner(self, runner_getter: Callable[[], 'Runner']) -> 'RunnerNode':
+        return RunnerNode(self, runner_getter)
 
     def initialize(self):
         """
@@ -113,14 +117,16 @@ class Node(ABC):
         self.parent: Optional[Node] = None
         self.children: List[Node] = []
 
-    @abstractmethod
     @property
     def data(self):
         raise NotImplementedError
 
     @property
     def name(self):
-        return self.data.__name__
+        try:
+            return self.data.__name__
+        except AttributeError:
+            return str(self.data)
 
     @property
     def type(self):
@@ -402,7 +408,6 @@ class Runner(ABC):
             assert result is None, 'Tests should not return anything'
             self.passes.append((node, result))
         else:
-            # TODO: Should be BaseException?
             assert isinstance(result, Exception)
             self.fails.append((node, result))
         assert len(node.children) == 0
@@ -419,7 +424,7 @@ class Runner(ABC):
         raise CutestError("Suites can only be root of graph")
 
     def _run_runner_node(self, node: 'RunnerNode', fixtures: Set[Fixture]):
-        runner = node.runner_cls()
+        runner = node.get_runner()
         runner.run(node, fixtures)
         self.passes += runner.passes
         self.fails += runner.fails
@@ -448,13 +453,23 @@ class ExecutorRunner(Runner):
         self.executor.submit(super()._run_fixture, node, fixtures)
 
 
+class ThreadRunner(ExecutorRunner):
+    def __init__(self):
+        super().__init__(ThreadPoolExecutor)
+
+
+class ProcessRunner(ExecutorRunner):
+    def __init__(self):
+        super().__init__(ProcessPoolExecutor)
+
+
 class RunnerNode(Node):
 
-    def __init__(self, model: Model, runner_cls: Type[Runner]):
+    def __init__(self, model: Model, get_runner: Callable[[], Runner]):
         super().__init__(model)
-        self.runner_cls: Type[Runner] = runner_cls
+        self.get_runner: Callable[[], Runner] = get_runner
 
-    # Extract next 2? methods into non-leaf Node class
+    # TODO: Extract next 2? methods into non-leaf Node class
     def __enter__(self):
         self.model.current_suite.add(self)
         self.model.current_suite.parent_stack.add(self)
@@ -467,7 +482,7 @@ class RunnerNode(Node):
 
     @property
     def data(self):
-        return self.runner_cls
+        return self.get_runner
 
 
 class Collection:
