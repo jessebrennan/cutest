@@ -30,20 +30,9 @@ from cutest.util import Stack
 """
 Outstanding things:
 
-- What happens if a suite is called inside of another suite?
-  Does this break anything?
 - Test reporting / logging
-- Concurrent fixture
 - Skipping tests
-- using fixture outside of test
 - Calling tests inside of tests?
-
-Next step:
-- Write a test that uses a simple fixture. Observe where / how
-  it makes sense to access the state.
-- Also make a test that contains sub-tests. How are those handled
-  with state?
-
 """
 
 log = logging.getLogger(__name__)
