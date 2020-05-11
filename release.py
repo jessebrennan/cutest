@@ -14,7 +14,7 @@ VERSION_FILE = Path('src') / 'cutest' / '_version.py'
 
 help_message = '\n'.join(textwrap.wrap(
     "The argument must be formatted as either 'major', 'minor', 'patch'"
-    " or 'X.X.X'\nIf one of the first three options is used than that "
+    " or 'X.X.X'\nIf one of the first three options is used then that "
     "part of the version will be incremented and all lesser parts of "
     "the version will be reset to 0."
 ))
