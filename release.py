@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from pathlib import Path
 import re
 import sys
 import textwrap
@@ -9,7 +10,7 @@ import textwrap
 # This should only be called from the Makefile
 #
 
-VERSION_FILE = 'VERSION'
+VERSION_FILE = Path('src') / 'cutest' / '_version.py'
 
 help_message = '\n'.join(textwrap.wrap(
     "The argument must be formatted as either 'major', 'minor', 'patch'"
@@ -21,17 +22,20 @@ help_message = '\n'.join(textwrap.wrap(
 
 def read_version(string=False):
     with open(VERSION_FILE, 'r') as fp:
-        version_tup = tuple(map(int, fp.read().split('.')))
-        assert len(version_tup) == 3
-        if string:
-            return '.'.join(map(str, version_tup))
+        match = re.match(r"^version = '(\d+)\.(\d+)\.(\d+)'$", fp.read())
+        if match:
+            version_tup = match.groups()
+            if string:
+                return '.'.join(version_tup)
+            else:
+                return tuple(int(v) for v in version_tup)
         else:
-            return version_tup
+            raise ValueError('Version file is improperly formatted')
 
 
 def write_version(major, minor, patch):
     with open(VERSION_FILE, 'w') as fp:
-        fp.write(f'{major}.{minor}.{patch}')
+        fp.write(f"version = '{major}.{minor}.{patch}'\n")
 
 
 def main():
@@ -56,7 +60,7 @@ def main():
     elif arg == 'patch':
         patch += 1
     # of form X.X.X
-    elif re.match('^\d*\.\d*\.\d*$', arg):
+    elif re.match(r'^\d*\.\d*\.\d*$', arg):
         major, minor, patch = tuple(arg.split('.'))
     else:
         print(help_message, file=sys.stderr)

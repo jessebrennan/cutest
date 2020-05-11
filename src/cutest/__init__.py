@@ -27,6 +27,7 @@ from typing import (
     ContextManager,
     Any)
 
+from cutest import _version
 from cutest.stream import ThreadSafeOutputStream
 from cutest.util import Stack, td_format
 
@@ -40,6 +41,8 @@ Outstanding things:
 """
 
 log = logging.getLogger(__name__)
+
+__version__ = _version.version
 
 
 class Model:

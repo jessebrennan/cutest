@@ -27,6 +27,6 @@ undevelop:
 	pip uninstall -y -r requirements.dev.txt
 
 release: test
-	python release.py $(VERSION)
+	python release.py $(version)
 
 .PHONY: all lint mypy test develop undevelop release
