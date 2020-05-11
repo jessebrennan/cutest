@@ -464,9 +464,7 @@ class Runner(ABC):
     def write_intro(self):
         if self.verbosity >= 1:
             self.writeln('=' * 80, bold=True)
-            # TODO: Add a way to obtain version info
-            # self.writeln('platform %s -- Python %s, cutest-%s', sys.platform, platform.python_version(), !!!)
-            self.writeln('platform %s -- Python %s', sys.platform, platform.python_version())
+            self.writeln('platform %s -- Python %s, cutest-%s', sys.platform, platform.python_version(), __version__)
 
     def write_summary(self):
         total_seconds = time.time() - self.start_time
