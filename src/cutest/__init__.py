@@ -2,7 +2,9 @@ import argparse
 import importlib
 import inspect
 import logging
+import platform
 import sys
+import time
 from abc import ABC
 from concurrent.futures import (
     Executor,
@@ -11,6 +13,7 @@ from concurrent.futures import (
 )
 from contextlib import contextmanager, ExitStack
 from copy import copy
+from traceback import TracebackException
 from typing import (
     List,
     Optional,
@@ -22,10 +25,10 @@ from typing import (
     Callable,
     Union,
     ContextManager,
-)
+    Any)
 
-from cutest.util import Stack
-
+from cutest.stream import ThreadSafeOutputStream
+from cutest.util import Stack, td_format
 
 """
 Outstanding things:
@@ -33,6 +36,7 @@ Outstanding things:
 - Test reporting / logging
 - Skipping tests
 - Calling tests inside of tests?
+- What happens if there is a failure inside of a fixture?
 """
 
 log = logging.getLogger(__name__)
@@ -83,8 +87,8 @@ class Model:
     def processes(self):
         return self.runner(ProcessRunner)
 
-    def runner(self, runner_getter: Callable[[], 'Runner']) -> 'RunnerNode':
-        return RunnerNode(self, runner_getter)
+    def runner(self, runner_class: Type['Runner']) -> 'RunnerNode':
+        return RunnerNode(self, runner_class)
 
     def initialize(self):
         """
@@ -121,10 +125,22 @@ class Node(ABC):
     def type(self):
         return self.__class__.__name__
 
-    def print_graph(self, depth=0):
-        log.info('%s%s %s', '  ' * depth, self.type, self.name)
+    def lineage(self) -> Iterable['Node']:
+        reverse_lineage = []
+        curr = self
+        while curr is not self.root:
+            curr = curr.parent
+            reverse_lineage.append(curr)
+        assert curr.parent is None
+        return reversed(reverse_lineage)
+
+    def lineage_str(self):
+        return '.'.join(n.name for n in self.lineage())
+
+    def print_graph(self, stream_: ThreadSafeOutputStream, depth=0):
+        stream_.writeln('%s%s %s', '  ' * depth, self.type, self.name)
         for node in self.children:
-            node.print_graph(depth=depth + 1)
+            node.print_graph(stream_, depth=depth + 1)
 
     def prune_all_but(self, nodes: Iterable['Node']) -> bool:
         """
@@ -304,20 +320,9 @@ class Test(CallableNode):
         else:
             self.model.current_suite.add(self)
 
-    def run(self, fixtures: Set[Fixture]):
-        # TODO: Maybe log something here about the test that's running
-        log.info('Running test %s', self.name)
+    def run(self, fixtures: Set[Fixture]) -> Any:
         args, kwargs = self._replace_args(fixtures)
-        try:
-            result = self.func(*args, **kwargs)
-        except Exception as e:
-            # TODO: Log failure, here or in recursive run_suite? (probably here)
-            log.info('Test %s failed', self.name)
-            return False, e
-        else:
-            # TODO: log success
-            log.info('Test %s passed', self.name)
-            return True, result
+        return self.func(*args, **kwargs)
 
     @property
     def data(self):
@@ -330,10 +335,24 @@ class Test(CallableNode):
 # FIXME: Should this even be abstract?
 class Runner(ABC):
 
-    def __init__(self):
-        self.passes: List[Tuple[Test, None]] = []
-        self.fails: List[Tuple[Test, Exception]] = []
+    def __init__(self, stream_: ThreadSafeOutputStream, verbosity: int):
+        self.stream: ThreadSafeOutputStream = stream_
+        self.verbosity = verbosity
+        self.visits: List[Test] = []
+        self.passes: List[Test] = []
+        self.fails: List[Tuple[Test, TracebackException]] = []
+        self.start_time: Optional[float]
         self.__suites_ran: Set[Suite] = set()
+
+    def __enter__(self):
+        self.write_intro()
+        self.start_time = time.time()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.write_summary()
+        # TODO: Do we clear passes and fails here?
+        return False
 
     def run_collection(self, collection: 'Collection'):
         for model in collection.models:
@@ -343,7 +362,6 @@ class Runner(ABC):
         self.run_tests(collection.tests)
 
     def run_model(self, model: Model):
-        log.info('Running model %s', model)
         for suite in model.suites:
             self.run_suite(suite)
 
@@ -366,8 +384,11 @@ class Runner(ABC):
         if suite in self.__suites_ran:
             log.warning('Suite %s was already run', suite)
         else:
-            log.info('Running test suite %s', suite)
-            suite.print_graph()
+            if self.verbosity >= 1:
+                self.write('Running test suite: ')
+                self.writeln('%s', suite.name, bold=True)
+                suite.print_graph(self.stream, depth=1)
+                self.writeln()
             self.__suites_ran.add(suite)
             self.run(suite, fixtures=set())
 
@@ -392,13 +413,29 @@ class Runner(ABC):
             assert False
 
     def _run_test(self, node: Test, fixtures: Set[Fixture]):
-        success, result = node.run(fixtures)
-        if success:
-            assert result is None, 'Tests should not return anything'
-            self.passes.append((node, result))
+        self.visits.append(node)
+        if self.verbosity >= 1:
+            self.write('Running test %s (%s) ... ', node.name, node.lineage_str())
+        try:
+            result = node.run(fixtures)
+        except Exception:
+            traceback = TracebackException(*sys.exc_info())
+            self.fails.append((node, traceback))
+            if self.verbosity == 0:
+                self.write('F', color='red')
+            elif self.verbosity >= 1:
+                self.writeln('FAILED', color='red')
+            else:
+                assert False
         else:
-            assert isinstance(result, Exception)
-            self.fails.append((node, result))
+            assert result is None, 'Tests should not return anything'
+            self.passes.append(node)
+            if self.verbosity == 0:
+                self.write('.')
+            elif self.verbosity >= 1:
+                self.writeln('PASSED', color='green')
+            else:
+                assert False
         assert len(node.children) == 0
 
     def _run_fixture(self, node: Fixture, fixtures: Set[Fixture]):
@@ -413,10 +450,47 @@ class Runner(ABC):
         raise CutestError("Suites can only be root of graph")
 
     def _run_runner_node(self, node: 'RunnerNode', fixtures: Set[Fixture]):
-        runner = node.get_runner()
+        runner = node.runner_class(self.stream, verbosity=self.verbosity)
         runner.run(node, fixtures)
+        self.visits += runner.visits
         self.passes += runner.passes
         self.fails += runner.fails
+
+    def write(self, *args, **kwargs):
+        self.stream.write(*args, **kwargs)
+
+    def writeln(self, *args, **kwargs):
+        self.stream.writeln(*args, **kwargs)
+
+    def write_intro(self):
+        if self.verbosity >= 1:
+            self.writeln('=' * 80, bold=True)
+            # TODO: Add a way to obtain version info
+            # self.writeln('platform %s -- Python %s, cutest-%s', sys.platform, platform.python_version(), !!!)
+            self.writeln('platform %s -- Python %s', sys.platform, platform.python_version())
+
+    def write_summary(self):
+        total_seconds = time.time() - self.start_time
+        for test, traceback in self.fails:
+            self.writeln()
+            self.writeln('=' * 80, color='red')
+            self.writeln('FAILED: %s (%s)', test.name, test.lineage_str(), color='red', bold=True)
+            self.writeln('-' * 80, color='red')
+            for line in traceback.format():
+                self.write(line)
+        self.writeln()
+        self.writeln('-' * 80)
+        self.writeln('Ran %s tests in %s', len(self.visits), td_format(total_seconds), bold=True)
+        self.writeln()
+        if self.fails:
+            self.write('Failed: %i', len(self.fails), color='red', bold=True)
+        if self.passes:
+            if self.fails:
+                self.write(', ')
+            self.write('Passed: %i', len(self.passes), color='green', bold=not self.fails)
+        if not self.passes and not self.fails:
+            self.write('No tests ran', color='yellow')
+        self.writeln()
 
 
 class SerialRunner(Runner):
@@ -425,8 +499,8 @@ class SerialRunner(Runner):
 
 class ExecutorRunner(Runner):
 
-    def __init__(self, executor_class: Type[Executor]):
-        super().__init__()
+    def __init__(self, executor_class: Type[Executor], *args, **kwargs):
+        super().__init__(*args, **kwargs)
         self.executor: Executor = executor_class()
         # We can't share executors between runners since executors are
         # not re-entrant
@@ -443,20 +517,20 @@ class ExecutorRunner(Runner):
 
 
 class ThreadRunner(ExecutorRunner):
-    def __init__(self):
-        super().__init__(ThreadPoolExecutor)
+    def __init__(self, *args, **kwargs):
+        super().__init__(ThreadPoolExecutor, *args, **kwargs)
 
 
 class ProcessRunner(ExecutorRunner):
-    def __init__(self):
-        super().__init__(ProcessPoolExecutor)
+    def __init__(self, *args, **kwargs):
+        super().__init__(ProcessPoolExecutor, *args, **kwargs)
 
 
 class RunnerNode(Node):
 
-    def __init__(self, model: Model, get_runner: Callable[[], Runner]):
+    def __init__(self, model: Model, runner_class: Type[Runner]):
         super().__init__(model)
-        self.get_runner: Callable[[], Runner] = get_runner
+        self.runner_class = runner_class
 
     # TODO: Extract next 2? methods into non-leaf Node class
     def __enter__(self):
@@ -471,7 +545,7 @@ class RunnerNode(Node):
 
     @property
     def data(self):
-        return self.get_runner
+        return self.runner_class
 
 
 class Collection:
@@ -521,6 +595,10 @@ class CutestError(Exception):
     pass
 
 
+def default_output_stream():
+    return ThreadSafeOutputStream(sys.stderr)
+
+
 def main(argv=None):
     if argv is not None:
         # If called programmatically (i.e. tests), we don't want to override logging info
@@ -534,5 +612,7 @@ def main(argv=None):
     options = parser.parse_args(argv)
     collection = Collection()
     collection.add_tests(options.tests)
-    runner = SerialRunner()
-    runner.run_collection(collection)
+    with SerialRunner(default_output_stream(), verbosity=options.verbose) as runner:
+        runner.run_collection(collection)
+    if runner.fails:
+        exit(1)

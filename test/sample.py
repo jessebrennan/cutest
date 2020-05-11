@@ -18,6 +18,22 @@ def my_suite():
         test_5()
 
 
+@cu.suite
+def mixed_suite():
+    test_1()
+    with fix_1():
+        test_2()
+        test_fail()
+        with fix_2() as f2:
+            test_3(f2)
+            with cu.threads():
+                test_4()
+                test_1()
+                test_fail()
+        test_fail()
+        test_5()
+
+
 @cu.test
 def test_1():
     print('test 1')
@@ -45,6 +61,12 @@ def test_4():
 @cu.test
 def test_5():
     print('test 5')
+
+
+@cu.test
+def test_fail():
+    print('asserting false')
+    assert False
 
 
 @cu.fixture
