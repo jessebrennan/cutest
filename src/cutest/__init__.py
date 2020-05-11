@@ -63,11 +63,7 @@ class Model:
         block. Any cleanup should happen inside of an attached finally
         block.
         """
-        if (
-                inspect.isclass(obj)
-                and hasattr(obj, '__enter__')
-                and hasattr(obj, '__exit__')
-        ):
+        if inspect.isclass(obj) and hasattr(obj, '__enter__') and hasattr(obj, '__exit__'):
             return FixtureDefinition(self, obj)
         elif inspect.isgeneratorfunction(obj):
             cm = contextmanager(obj)
