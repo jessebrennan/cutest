@@ -413,7 +413,7 @@ class Runner:
     def _run_test(self, node: Test, fixtures: Set[Fixture]):
         self.visits.append(node)
         if self.verbosity >= 1:
-            self.write('Running test %s (%s) ... ', node.name, node.lineage_str())
+            self.write('Running %s (%s) ... ', node.name, node.lineage_str())
         try:
             result = node.run(fixtures)
         except Exception:
