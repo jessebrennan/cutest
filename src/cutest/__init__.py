@@ -331,8 +331,7 @@ class Test(CallableNode):
         raise CutestError('Tests should not have child nodes')
 
 
-# FIXME: Should this even be abstract?
-class Runner(ABC):
+class Runner:
 
     def __init__(self, stream_: ThreadSafeOutputStream, verbosity: int):
         self.stream: ThreadSafeOutputStream = stream_
