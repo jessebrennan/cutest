@@ -1,5 +1,6 @@
 # cutest
 
+![ci](https://github.com/jessebrennan/cutest/workflows/ci/badge.svg)
 [![Build Status](https://travis-ci.com/jessebrennan/cutest.svg?branch=master)](https://travis-ci.com/jessebrennan/cutest)
 
 A cute, composable unit test framework for Python
