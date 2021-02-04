@@ -493,11 +493,15 @@ class SerialRunner(Runner):
     pass
 
 
-class ExecutorRunner(Runner):
+class ExecutorRunner(Runner, ABC):
 
-    def __init__(self, executor_class: Type[Executor], *args, **kwargs):
+    @classmethod
+    def executor_factory(cls) -> Executor:
+        raise NotImplementedError
+
+    def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.executor: Executor = executor_class()
+        self.executor: Executor = self.executor_factory()
         # We can't share executors between runners since executors are
         # not re-entrant
 
@@ -513,13 +517,17 @@ class ExecutorRunner(Runner):
 
 
 class ThreadRunner(ExecutorRunner):
-    def __init__(self, *args, **kwargs):
-        super().__init__(ThreadPoolExecutor, *args, **kwargs)
+
+    @classmethod
+    def executor_factory(cls) -> Executor:
+        return ThreadPoolExecutor()
 
 
 class ProcessRunner(ExecutorRunner):
-    def __init__(self, *args, **kwargs):
-        super().__init__(ProcessPoolExecutor, *args, **kwargs)
+
+    @classmethod
+    def executor_factory(cls) -> Executor:
+        return ProcessPoolExecutor()
 
 
 class RunnerNode(Node):
