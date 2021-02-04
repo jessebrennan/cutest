@@ -20,7 +20,7 @@ test: $(tests)
 
 develop:
 	pip install -e .
-	pip install -Ur --upgrade-strategy eager requirements.dev.txt
+	pip install -r  requirements.dev.txt --upgrade --upgrade-strategy eager
 
 undevelop:
 	python setup.py develop --uninstall
