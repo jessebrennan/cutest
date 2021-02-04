@@ -315,7 +315,7 @@ class Test(CallableNode):
         super().__init__(model, args, kwargs)
         self.func = func
         if self.model.current_suite is None:
-            raise CutestError(f'Test must be called from within a suite')
+            raise CutestError(f'Test {self.name!r} must be called from within a suite')
         else:
             self.model.current_suite.add(self)
 
