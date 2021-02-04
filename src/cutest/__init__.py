@@ -141,13 +141,13 @@ class Node(ABC):
         for node in self.children:
             node.print_graph(stream_, depth=depth + 1)
 
-    def prune_all_but(self, nodes: Iterable['Node']) -> bool:
+    def prune_children_except(self, nodes: Iterable['Node']) -> bool:
         """
         Prune children unless they are in nodes or ancestors of nodes.
 
         Return if this node should be saved
         """
-        save_children = [c for c in self.children if c.prune_all_but(nodes)]
+        save_children = [c for c in self.children if c.prune_children_except(nodes)]
         self.children = save_children
         return self in nodes or any(save_children)
 
@@ -375,7 +375,7 @@ class Runner(ABC):
         assert None not in raw_suites
         for suite in raw_suites:
             suite.initialize()
-            if suite.prune_all_but(tests):
+            if suite.prune_children_except(tests):
                 yield suite
 
     def run_suite(self, suite: Suite):
