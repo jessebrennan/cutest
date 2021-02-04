@@ -1,12 +1,9 @@
-import logging
 import unittest
 
 import cutest
+from test import configure_test_logging
 
-logging.basicConfig(
-    format="%(asctime)s %(levelname)-7s %(threadName)s: %(message)s",
-    level=logging.INFO
-)
+configure_test_logging()
 
 
 class SmokeTest(unittest.TestCase):

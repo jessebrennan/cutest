@@ -1,7 +1,9 @@
 import unittest
 
 import cutest
-from test import sample
+from test import sample, configure_test_logging
+
+configure_test_logging()
 
 
 class RunnerTest(unittest.TestCase):
