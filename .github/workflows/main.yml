@@ -1,6 +1,6 @@
 name: ci
 
-on: [push]
+on: [push, pull_request]
 
 jobs:
   build:
@@ -22,3 +22,8 @@ jobs:
     - name: Unit tests
       run: |
         make test
+    - name: Custon stuff
+      run: |
+        echo 'run some custom stuff.'
+        echo 'we can do whatever we want'
+        echo 'we have control of the system'
